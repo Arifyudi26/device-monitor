@@ -23,14 +23,6 @@ export default function AppTabs() {
         />
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="logs">
-        <NativeTabs.Trigger.Label>Logs</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          md={{ default: 'format_list_bulleted', selected: 'format_list_bulleted' }}
-          selectedColor={GREEN}
-        />
-      </NativeTabs.Trigger>
-
       <NativeTabs.Trigger name="settings">
         <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon

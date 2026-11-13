@@ -4,6 +4,7 @@
  */
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { getPermissionsAsync as getContactsPermissions, requestPermissionsAsync as requestContactsPermissions } from 'expo-contacts';
 import * as Device from 'expo-device';
 import * as Location from 'expo-location';
 import * as Network from 'expo-network';
@@ -14,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Spacing } from '@/constants/theme';
-import { getDeviceId } from '@/lib/tracker';
+import { getDeviceId, getPairingCode } from '@/lib/tracker';
 
 type PermStatus = 'granted' | 'denied' | 'unknown';
 
@@ -28,28 +29,36 @@ interface PermItem {
 
 export default function SettingsScreen() {
   const [deviceId, setDeviceId] = useState('');
+  const [pairingCode, setPairingCode] = useState('');
   const [locationStatus, setLocationStatus] = useState<PermStatus>('unknown');
   const [networkOk, setNetworkOk] = useState<PermStatus>('unknown');
+  const [contactsStatus, setContactsStatus] = useState<PermStatus>('unknown');
 
   const checkPermissions = useCallback(async () => {
     // Lokasi
     const { status } = await Location.getForegroundPermissionsAsync();
     setLocationStatus(status === 'granted' ? 'granted' : 'denied');
 
-    // Network — cek apakah bisa ambil state
+    // Network
     try {
       const net = await Network.getNetworkStateAsync();
       setNetworkOk(net.type !== undefined ? 'granted' : 'denied');
     } catch {
       setNetworkOk('denied');
     }
+
+    // Kontak
+    const { status: ctStatus } = await getContactsPermissions();
+    setContactsStatus(ctStatus === 'granted' ? 'granted' : 'denied');
   }, []);
 
   const loadData = useCallback(() => {
     const check = () => {
       const id = getDeviceId();
+      const code = getPairingCode();
       if (id) setDeviceId(id);
-      else setTimeout(check, 200);
+      if (code) setPairingCode(code);
+      if (!id || !code) setTimeout(check, 200);
     };
     check();
   }, []);
@@ -89,6 +98,17 @@ export default function SettingsScreen() {
       desc: 'No special permission needed — available by default on Android.',
       status: 'granted',
       onRequest: async () => {},
+    },
+    {
+      key: 'contacts',
+      label: 'Contacts',
+      desc: 'Required for syncing contacts to the web dashboard on command.',
+      status: contactsStatus,
+      onRequest: async () => {
+        const { status: s } = await requestContactsPermissions();
+        if (s !== 'granted') await Linking.openSettings();
+        await checkPermissions();
+      },
     },
   ];
 
@@ -179,6 +199,34 @@ export default function SettingsScreen() {
             <Row label="Type"  value={Device.isDevice ? 'Physical Device' : 'Emulator/Simulator'} />
           </ThemedView>
 
+          {/* ── Pairing Code ─────────────────────────────────────────── */}
+          <View style={[styles.sectionHeader, styles.sectionGap]}>
+            <MaterialIcons name="link" size={16} color="#208AEF" />
+            <ThemedText type="smallBold"> Pairing Code</ThemedText>
+          </View>
+
+          <ThemedView type="backgroundElement" style={[styles.card, styles.pairingCard]}>
+            {pairingCode ? (
+              <>
+                <View style={styles.pairingCodeRow}>
+                  {pairingCode.split('').map((digit, i) => (
+                    <View key={i} style={styles.digitBox}>
+                      <ThemedText type="title" style={styles.digitText}>{digit}</ThemedText>
+                    </View>
+                  ))}
+                </View>
+                <ThemedText type="small" themeColor="textSecondary" style={styles.pairingHint}>
+                  Masukkan kode ini di web dashboard → "Add Device" untuk menghubungkan perangkat ke akun kamu.
+                  Kode akan hilang setelah device terhubung.
+                </ThemedText>
+              </>
+            ) : (
+              <ThemedText type="small" themeColor="textSecondary">
+                Device sudah terhubung ke akun.
+              </ThemedText>
+            )}
+          </ThemedView>
+
         </ScrollView>
       </SafeAreaView>
     </ThemedView>
@@ -256,4 +304,31 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.two },
   label: { width: 80, flexShrink: 0 },
   value: { flex: 1, flexWrap: 'wrap', fontSize: 13 },
+  pairingCard: { alignItems: 'center', gap: Spacing.three },
+  pairingCodeRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    justifyContent: 'center',
+  },
+  digitBox: {
+    width: 52,
+    height: 60,
+    borderRadius: Spacing.two,
+    backgroundColor: '#208AEF15',
+    borderWidth: 1.5,
+    borderColor: '#208AEF50',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  digitText: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#208AEF',
+    lineHeight: 34,
+  },
+  pairingHint: {
+    textAlign: 'center',
+    fontSize: 11,
+    lineHeight: 16,
+  },
 });

@@ -28,7 +28,7 @@ npm install
 # EXPO_PUBLIC_API_URL=https://your-backend.com
 
 # Jalankan
-npx expo start
+npx expo start --clear
 ```
 
 Scan QR code yang muncul di terminal menggunakan kamera HP → app langsung jalan di Expo Go.

@@ -21,7 +21,10 @@
       "permissions": [
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_WIFI_STATE",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_SMS",
+        "android.permission.READ_CALL_LOG"
       ]
     },
     "web": {
@@ -42,6 +45,12 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "Device Monitor memerlukan akses lokasi untuk mencatat aktivitas GPS."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Device Monitor memerlukan akses kontak."
         }
       ]
     ],
