@@ -12,10 +12,12 @@ Aplikasi React Native (Expo) untuk tracking aktivitas device secara realtime dan
 
 ## Cara menjalankan
 
+> **Catatan**: proyek ini sudah punya native module kustom (`modules/contact-accounts/`) dan package native (`expo-background-task`, `expo-dev-client`, dll). Akibatnya app **tidak bisa dijalankan di Expo Go** — wajib pakai development build. Lihat [Cara build ulang APK setiap ada perubahan/update](#cara-build-ulang-apk-setiap-ada-perubahanupdate) di bawah untuk build pertama kali.
+
 ### Prasyarat
 
 - Node.js v22+ ([nodejs.org](https://nodejs.org))
-- Expo Go di HP Android ([Play Store](https://play.google.com/store/apps/details?id=host.exp.exponent))
+- HP Android fisik dengan development build proyek ini sudah terpasang (lihat section build di bawah)
 - HP dan laptop terhubung ke WiFi yang sama
 
 ### Setup
@@ -27,11 +29,11 @@ npm install
 # Isi API URL di file .env
 # EXPO_PUBLIC_API_URL=https://your-backend.com
 
-# Jalankan
+# Jalankan Metro dev server
 npx expo start --clear
 ```
 
-Scan QR code yang muncul di terminal menggunakan kamera HP → app langsung jalan di Expo Go.
+Buka app dari development build yang sudah terpasang di HP (bukan Expo Go) — app otomatis connect ke Metro dan reload saat ada perubahan kode JS/TS.
 
 ## Format event yang dikirim ke backend
 
@@ -61,240 +63,154 @@ Tipe event: `app_open`, `app_close`, `app_background`, `app_foreground`, `batter
 
 ---
 
-## Fitur lanjutan: Track App Usage (App apa yang dibuka user)
+## Cara build ulang APK setiap ada perubahan/update
 
-> Fitur ini **tidak bisa berjalan di Expo Go**. Butuh build APK sendiri dan HP fisik.
+Panduan ini berlaku untuk **development build** (bukan Expo Go) — dipakai begitu proyek punya native module kustom (seperti `modules/contact-accounts/`) atau package yang butuh native code (`expo-background-task`, dll).
+
+### Langkah 0 — Kenali jenis perubahan yang kamu buat
+
+Tidak semua perubahan butuh build ulang APK. Cek dulu termasuk kategori mana:
+
+| Jenis perubahan | Contoh | Perlu build ulang APK? |
+|---|---|---|
+| Kode JS/TS biasa | ubah `src/app/index.tsx`, `src/hooks/*.ts`, logic apa pun yang bukan native | **Tidak** — cukup reload Metro (`r` di terminal `expo start`, atau shake HP → Reload) |
+| Native module baru/berubah | tambah/edit file `.kt`/`.java` di `modules/*/android/`, ubah `expo-module.config.json` | **Ya** — wajib build ulang |
+| Tambah package via `npx expo install` yang punya native code | `expo-battery`, `expo-background-task`, library pihak ketiga dengan kode native | **Ya** — wajib build ulang |
+| Ubah `app.json` (permission, plugin, config native) | tambah permission Android, tambah/ubah entry di `plugins` | **Ya** — wajib build ulang |
+| Ubah `.env` (`EXPO_PUBLIC_API_URL`, dst) | ganti IP backend | **Ya** — variabel `EXPO_PUBLIC_*` di-bake saat build, reload JS saja tidak cukup |
+
+Kalau ragu, aman untuk selalu build ulang — cuma makan waktu lebih lama, tidak merusak apa pun.
+
+### Jalur A — Build lokal (`npx expo run:android`)
+
+Pakai ini kalau laptop sudah siap Android Studio + JDK + ADB, dan HP terhubung USB.
+
+```bash
+# 1. Pastikan device terdeteksi
+adb devices
+
+# 2. Build & install langsung ke HP yang terhubung
+npx expo run:android
+```
+
+Ini otomatis: generate ulang folder `android/` kalau perlu (CNG), compile native code, install APK ke HP, dan start Metro.
+
+**Kalau sebelumnya pernah `prebuild` manual dan sekarang nambah/ubah native module**, jalankan prebuild dulu sebelum run supaya autolinking mendeteksi module baru:
+
+```bash
+npx expo prebuild --platform android --clean
+npx expo run:android
+```
+
+**Known issue di Windows**: build native (CMake/Ninja) bisa gagal dengan error `Filename longer than 260 characters` atau `ninja: error: mkdir(...)`. Ini karena path proyek + path source C++ gabungan melebihi batas 260 karakter Windows (`MAX_PATH`). Solusi (lihat [docs.expo.dev/troubleshooting/windows-long-paths](https://docs.expo.dev/troubleshooting/windows-long-paths)):
+
+1. Aktifkan Windows long path (PowerShell **as Administrator**, lalu **restart komputer**):
+   ```powershell
+   New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+   ```
+2. Install CMake versi baru (bawa Ninja yang support long path) lewat Android Studio → **Settings → Languages & Frameworks → Android SDK → SDK Tools** → centang "Show Package Details" → install **CMake 3.31.6** (atau versi terbaru).
+3. Set versi CMake itu di `%USERPROFILE%\.gradle\gradle.properties`:
+   ```properties
+   android.cmakeVersion=3.31.6
+   ```
+4. Hapus cache build lama lalu build ulang:
+   ```bash
+   rm -rf android/app/.cxx android/app/build android/build
+   npx expo run:android
+   ```
+
+Kalau masih bermasalah atau Android Studio/JDK belum terpasang, pakai Jalur B di bawah — tidak kena limitasi Windows ini karena compile dilakukan di server Linux.
+
+### Jalur B — Build cloud (EAS Build), hasil APK untuk dikirim manual
+
+Pakai ini kalau tidak mau install Android Studio, laptop bermasalah, atau mau kirim file APK langsung ke HP tanpa kabel USB/ADB.
+
+```bash
+# Sekali saja — install CLI dan login (skip kalau sudah pernah)
+npx eas-cli login
+
+# Sekali saja per proyek — hubungkan ke project EAS (skip kalau eas.json & project ID sudah ada)
+npx eas-cli init --account <nama-akun-expo-kamu>
+
+# Build APK (profile "development" = development client, bisa reload JS tanpa build ulang untuk perubahan JS)
+npx eas-cli build --profile development --platform android
+```
+
+Tunggu sampai selesai (biasanya 10–20 menit, lebih lama saat antrian ramai). Progress bisa dipantau lewat link yang muncul di terminal, formatnya:
+```
+https://expo.dev/accounts/<akun>/projects/device-monitor/builds/<build-id>
+```
+
+Setelah selesai, CLI menampilkan link download APK, atau buka halaman build di atas dan klik **Download**. Kirim file `.apk` itu ke HP (WhatsApp ke diri sendiri, Google Drive, kabel data biasa, dll), lalu install manual:
+
+1. Buka file `.apk` di HP.
+2. Kalau muncul peringatan "Install blocked" / "Unknown apps", buka **Settings** dan izinkan install dari sumber itu (Chrome/Files, sesuai dari mana file dibuka).
+3. Tap **Install**.
+
+> Profile `development` di `eas.json` sudah diset `"buildType": "apk"` (bukan `.aab`), supaya hasilnya file APK yang bisa diinstall manual langsung, bukan format yang cuma bisa lewat Play Store.
+
+### Setelah APK terpasang — update berikutnya
+
+- **Perubahan JS/TS saja**: jalankan `npx expo start`, buka app dari development build yang sudah terpasang di HP (bukan install ulang), app otomatis connect ke Metro dan reload.
+- **Perubahan native/package baru/app.json**: ulangi Jalur A atau Jalur B dari awal untuk generate APK baru, install ulang (menimpa yang lama, data app tidak hilang selama `versionCode`/signing key sama).
+
+---
+
+## Fitur lanjutan: Sumber Akun Kontak (Google / SIM / WhatsApp / dll)
+
+> Fitur ini **tidak bisa berjalan di Expo Go**. Butuh development build dan HP fisik.
 
 ### Kenapa tidak bisa di Expo Go?
 
-Android punya sistem sandbox — setiap app berjalan terisolasi, tidak bisa melihat aktivitas app lain. Untuk mengakses data usage app, dibutuhkan:
+`expo-contacts` tidak mengekspos akun sumber kontak di Android — fitur `Container` (yang merepresentasikan akun seperti Google/iCloud/Exchange) hanya tersedia di **iOS**. Kolom `ACCOUNT_TYPE` dan `ACCOUNT_NAME` ada di level `ContentProvider` Android (`ContactsContract.RawContacts`), jadi harus diambil lewat native module kustom. Native module baru tidak bisa dijalankan di Expo Go karena APK Expo Go sudah fix berisi native module tertentu dan tidak bisa disisipi kode native tambahan — harus development build (APK sendiri).
 
-1. API `UsageStatsManager` (Android native)
-2. Permission khusus `PACKAGE_USAGE_STATS`
-3. Native module Kotlin/Java custom
-4. Build APK sendiri (bukan lewat Expo Go)
+Modul ini sudah dibuat di `modules/contact-accounts/` (local Expo module, Android-only) dan dipanggil otomatis saat command `fetch_contacts` dijalankan (lihat `handleFetchContacts` di `src/hooks/use-device-monitor.ts`).
 
-### Alur lengkap implementasi
+### Langkah testing
 
----
-
-#### Step 1 — Install Android Studio
-
-Download dan install dari [developer.android.com/studio](https://developer.android.com/studio).
-
-Android Studio otomatis menginstall:
-- Android SDK
-- ADB (Android Debug Bridge)
-- Build tools
-
----
-
-#### Step 2 — Set environment variable ADB
-
-Buka terminal sebagai **Administrator**, jalankan:
+#### 1. Generate project Android (Continuous Native Generation)
 
 ```bash
-setx ANDROID_HOME "%LOCALAPPDATA%\Android\Sdk"
-setx PATH "%PATH%;%LOCALAPPDATA%\Android\Sdk\platform-tools"
+npx expo prebuild --platform android --clean
 ```
 
-Restart terminal, verifikasi:
+Ini membuat folder `android/` dan otomatis mendeteksi local module di `modules/contact-accounts` lewat Expo autolinking — tidak perlu konfigurasi tambahan.
 
-```bash
-adb version
-```
+#### 2. Build & install ke HP
 
----
-
-#### Step 3 — Enable USB Debugging di HP
-
-1. **Settings → About Phone** → ketuk **Build Number** sebanyak 7x → muncul notif "Developer options enabled"
-2. **Settings → Developer Options** → aktifkan **USB Debugging**
-
----
-
-#### Step 4 — Connect HP ke laptop via kabel USB
+Pastikan HP terhubung lewat USB dengan USB Debugging aktif (lihat [Cara build ulang APK](#cara-build-ulang-apk-setiap-ada-perubahanupdate) di atas kalau belum pernah setup ADB/Android Studio), cek dengan:
 
 ```bash
 adb devices
 ```
 
-Harus muncul device ID. Kalau muncul `unauthorized`, ada popup di HP → tap **Allow**.
-
----
-
-#### Step 5 — Generate native folders via Expo prebuild
+Lalu build & install:
 
 ```bash
-npx expo prebuild
-```
-
-Ini membuat folder `/android` dan `/ios` yang berisi native project. Jangan edit manual — semua konfigurasi tetap lewat `app.json` dan config plugins.
-
----
-
-#### Step 6 — Tambah permission di app.json
-
-```json
-{
-  "expo": {
-    "android": {
-      "permissions": [
-        "android.permission.PACKAGE_USAGE_STATS"
-      ]
-    }
-  }
-}
-```
-
-> Permission ini tidak muncul sebagai dialog biasa — user harus approve manual di **Settings → Special App Access → Usage Access → [nama app] → Allow**.
-
----
-
-#### Step 7 — Buat native module Kotlin
-
-Buat file `android/app/src/main/java/com/devicemonitor/UsageStatsModule.kt`:
-
-```kotlin
-package com.devicemonitor
-
-import android.app.usage.UsageStatsManager
-import android.content.Context
-import android.content.Intent
-import android.provider.Settings
-import com.facebook.react.bridge.*
-import java.util.concurrent.TimeUnit
-
-class UsageStatsModule(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext) {
-
-    override fun getName() = "UsageStats"
-
-    // Cek apakah permission sudah diberikan
-    @ReactMethod
-    fun hasPermission(promise: Promise) {
-        val usm = reactApplicationContext
-            .getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val now = System.currentTimeMillis()
-        val stats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY, now - 1000, now
-        )
-        promise.resolve(stats != null && stats.isNotEmpty())
-    }
-
-    // Buka halaman Settings untuk minta permission
-    @ReactMethod
-    fun requestPermission() {
-        val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        reactApplicationContext.startActivity(intent)
-    }
-
-    // Ambil app usage dalam rentang waktu (ms)
-    @ReactMethod
-    fun getUsageStats(startTime: Double, endTime: Double, promise: Promise) {
-        try {
-            val usm = reactApplicationContext
-                .getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-            val stats = usm.queryUsageStats(
-                UsageStatsManager.INTERVAL_BEST,
-                startTime.toLong(),
-                endTime.toLong()
-            )
-
-            val result = WritableNativeArray()
-            stats?.forEach { stat ->
-                if (stat.totalTimeInForeground > 0) {
-                    val map = WritableNativeMap()
-                    map.putString("packageName", stat.packageName)
-                    map.putDouble("totalTimeMs", stat.totalTimeInForeground.toDouble())
-                    map.putDouble("lastTimeUsed", stat.lastTimeUsed.toDouble())
-                    result.pushMap(map)
-                }
-            }
-            promise.resolve(result)
-        } catch (e: Exception) {
-            promise.reject("ERR_USAGE_STATS", e.message)
-        }
-    }
-}
-```
-
----
-
-#### Step 8 — Daftarkan module ke React Native
-
-Buat file `android/app/src/main/java/com/devicemonitor/UsageStatsPackage.kt`:
-
-```kotlin
-package com.devicemonitor
-
-import com.facebook.react.ReactPackage
-import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.uimanager.ViewManager
-
-class UsageStatsPackage : ReactPackage {
-    override fun createNativeModules(ctx: ReactApplicationContext) =
-        listOf(UsageStatsModule(ctx))
-
-    override fun createViewManagers(ctx: ReactApplicationContext) =
-        emptyList<ViewManager<*, *>>()
-}
-```
-
-Tambahkan package di `android/app/src/main/java/com/devicemonitor/MainApplication.kt`:
-
-```kotlin
-override fun getPackages() = PackageList(this).packages.apply {
-    add(UsageStatsPackage())  // tambah baris ini
-}
-```
-
----
-
-#### Step 9 — Panggil dari JavaScript/TypeScript
-
-Buat file `src/lib/usage-stats.ts`:
-
-```typescript
-import { NativeModules, Platform } from 'react-native';
-
-const { UsageStats } = NativeModules;
-
-export async function hasUsagePermission(): Promise<boolean> {
-  if (Platform.OS !== 'android') return false;
-  return UsageStats.hasPermission();
-}
-
-export async function requestUsagePermission(): Promise<void> {
-  if (Platform.OS !== 'android') return;
-  UsageStats.requestPermission();
-}
-
-export async function getAppUsage(sinceMs = 60 * 60 * 1000) {
-  if (Platform.OS !== 'android') return [];
-  const now = Date.now();
-  return UsageStats.getUsageStats(now - sinceMs, now);
-}
-```
-
----
-
-#### Step 10 — Build dan install APK ke HP
-
-```bash
-# Build debug APK langsung ke HP yang terhubung via USB
 npx expo run:android
-
-# Atau build APK file via EAS (cloud build, tidak butuh Android Studio penuh)
-npx eas-cli@latest build --platform android --profile development
 ```
 
----
+Ini compile APK development build dan install langsung ke HP yang terhubung, serta otomatis start Metro.
+
+Alternatif tanpa Android Studio di laptop (cloud build, lihat [Jalur B](#jalur-b--build-cloud-eas-build-hasil-apk-untuk-dikirim-manual) di atas untuk detail lengkap):
+
+```bash
+npx eas-cli build --profile development --platform android
+```
+
+lalu download & install APK hasilnya manual ke HP.
+
+#### 3. Jalankan & tes
+
+1. Buka app di HP lewat ikon development build (bukan Expo Go).
+2. Pastikan `.env` (`EXPO_PUBLIC_API_URL`) menunjuk IP laptop yang benar dan HP + laptop ada di WiFi yang sama.
+3. Dari dashboard web (`device-monitor-web`), buka halaman **Contacts** lalu klik **Sync Kontak**.
+4. Tunggu status command jadi `executed` (polling tiap 5 detik di HP).
+5. Lihat daftar kontak di web — tiap kontak sekarang menampilkan baris kecil `🏷 Google` / `🏷 SIM Card` / `🏷 WhatsApp` / dll di bawah nomor telepon, sesuai akun sumber aslinya di Android.
 
 ### Catatan penting
 
-- Permission `PACKAGE_USAGE_STATS` **tidak muncul sebagai dialog** — user harus buka **Settings → Special App Access → Usage Access** dan aktifkan manual.
-- Data yang tersedia: nama package app (misal `com.whatsapp`), total waktu di foreground, waktu terakhir digunakan.
-- **Nama app yang tampil** (misal "WhatsApp") bisa di-resolve dari package name menggunakan `PackageManager` di sisi Android.
-- Fitur ini **hanya untuk Android**. iOS tidak mengizinkan akses usage stats app lain sama sekali.
+- Setelah development build terpasang, app **tidak bisa lagi dibuka lewat Expo Go** untuk proyek ini — konsekuensi permanen begitu ada native module kustom. Reload JS biasa (`r` di Metro) tetap berfungsi untuk perubahan kode TypeScript; perubahan kode Kotlin butuh `npx expo run:android` ulang.
+- Modul mengembalikan label mentah (`com.xiaomi.account`, dst) sebagai fallback kalau belum ada mapping di `labelForAccountType` (`modules/contact-accounts/android/.../ContactAccountsModule.kt`). Tambahkan mapping baru di sana kalau ketemu account type lain yang perlu label lebih jelas.
+- Kalau native module belum terpasang (misal masih testing di Expo Go tanpa sengaja) atau platform bukan Android, `getAccountsForContacts` gagal diam-diam dan `sources` akan kosong — sync kontak tetap jalan normal, cuma tanpa info sumber akun.
+- Satu kontak gabungan (yang dilihat lewat `expo-contacts`) bisa berasal dari lebih dari satu `RawContact` (misal tersimpan di Google **dan** SIM sekaligus lalu digabung Android Contacts Provider) — dalam kasus itu field `sources` akan berisi lebih dari satu label.
