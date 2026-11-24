@@ -1,0 +1,10 @@
+{
+  "name": "contact-accounts",
+  "version": "1.0.0",
+  "description": "Local Expo module: ambil account type/name sumber kontak Android (Google, SIM, dll) via ContactsContract.RawContacts",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {},
+  "keywords": ["expo-module"],
+  "license": "MIT"
+}
