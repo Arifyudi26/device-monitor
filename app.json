@@ -56,7 +56,15 @@
           "contactsPermission": "Device Monitor memerlukan akses kontak."
         }
       ],
-      "expo-background-task"
+      "expo-background-task",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraProguardRules": "-keep class androidx.work.impl.** { <init>(...); }\n-keep class androidx.room.RoomDatabase { <init>(...); }\n-keep class * extends androidx.room.RoomDatabase { <init>(...); }\n-keep class * extends androidx.work.InputMerger { <init>(...); }\n-keep class * extends androidx.startup.Initializer { <init>(...); }"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
