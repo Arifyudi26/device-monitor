@@ -8,9 +8,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Spacing } from '@/constants/theme';
 import {
-    getBatteryStateLabel,
-    getNetworkTypeLabel,
-    useDeviceMonitor,
+  getBatteryStateLabel,
+  getNetworkTypeLabel,
+  useDeviceMonitor,
 } from '@/hooks/use-device-monitor';
 import { useTheme } from '@/hooks/use-theme';
 import { getDeviceId, getPairingCode } from '@/lib/tracker';
@@ -34,14 +34,12 @@ export default function DashboardScreen() {
   const theme = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const [deviceId, setDeviceId] = useState('');
-  const [pairingCode, setPairingCode] = useState('');
 
   useEffect(() => {
     const check = () => {
       const id = getDeviceId();
       const code = getPairingCode();
       if (id) setDeviceId(id);
-      if (code) setPairingCode(code);
       if (!id || !code) setTimeout(check, 200);
     };
     check();
@@ -90,26 +88,6 @@ export default function DashboardScreen() {
           <ThemedText type="small" themeColor="textSecondary">
             ID: {deviceId || '—'}
           </ThemedText>
-
-          {/* ── Pairing Code ───────────────────────────────────────────── */}
-          {pairingCode ? (
-            <ThemedView type="backgroundElement" style={styles.pairingBox}>
-              <View style={styles.pairingRow}>
-                <MaterialIcons name="link" size={16} color="#208AEF" />
-                <ThemedText type="smallBold" style={styles.pairingLabel}> Kode Pairing</ThemedText>
-              </View>
-              <View style={styles.pairingCodeRow}>
-                {pairingCode.split('').map((digit, i) => (
-                  <View key={i} style={styles.digitBox}>
-                    <ThemedText type="title" style={styles.digitText}>{digit}</ThemedText>
-                  </View>
-                ))}
-              </View>
-              <ThemedText type="small" themeColor="textSecondary" style={styles.pairingHint}>
-                Masukkan kode ini di web dashboard untuk menghubungkan perangkat
-              </ThemedText>
-            </ThemedView>
-          ) : null}
 
           {/* ── Baterai ────────────────────────────────────────────────── */}
           <ThemedView type="backgroundElement" style={styles.card}>
@@ -357,7 +335,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#208AEF30',
   },
-  pairingRow: { flexDirection: 'row', alignItems: 'center' },
   pairingLabel: { color: '#208AEF' },
   pairingCodeRow: {
     flexDirection: 'row',

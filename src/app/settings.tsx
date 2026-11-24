@@ -215,10 +215,6 @@ export default function SettingsScreen() {
                     </View>
                   ))}
                 </View>
-                <ThemedText type="small" themeColor="textSecondary" style={styles.pairingHint}>
-                  Masukkan kode ini di web dashboard → "Add Device" untuk menghubungkan perangkat ke akun kamu.
-                  Kode akan hilang setelah device terhubung.
-                </ThemedText>
               </>
             ) : (
               <ThemedText type="small" themeColor="textSecondary">
